@@ -1,0 +1,8 @@
+.env
+kite_token.txt
+__pycache__/
+*.pyc
+*.pyo
+logs/
+*.log
+.DS_Store
