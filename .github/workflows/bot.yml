@@ -2,20 +2,20 @@ name: Nifty Options Bot
 
 on:
   schedule:
-    - cron: '30 3 * * 1-5'   # 9:00 AM IST Mon-Fri (UTC+5:30 = UTC-5:30 offset)
-  workflow_dispatch:           # allow manual trigger from GitHub UI
+    - cron: '30 3 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 355      # 5h 55min — bot exits at 2:55 PM IST via SHUTDOWN_TIME
+    timeout-minutes: 355
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
           cache: pip
@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Restore bot state (capital + trade history)
+      - name: Restore bot state
         uses: actions/cache@v4
         with:
           path: |
@@ -35,27 +35,23 @@ jobs:
 
       - name: Run bot
         env:
-          # Timing — shifted earlier to fit within 6h GitHub Actions job limit
-          # Normal schedule: force_exit=15:00, EOD=15:15, shutdown=15:30
-          # GH Actions:      force_exit=14:45, EOD=14:50, shutdown=14:55
-          FORCE_EXIT_TIME:  "14:45"
+          FORCE_EXIT_TIME: "14:45"
           EOD_SUMMARY_TIME: "14:50"
-          SHUTDOWN_TIME:    "14:55"
-          # Credentials — set these as GitHub repository secrets
-          MANUAL_TRADING:           ${{ secrets.MANUAL_TRADING }}
-          PAPER_TRADING:            ${{ secrets.PAPER_TRADING }}
-          INITIAL_CAPITAL:          ${{ secrets.INITIAL_CAPITAL }}
-          KITE_API_KEY:             ${{ secrets.KITE_API_KEY }}
-          KITE_API_SECRET:          ${{ secrets.KITE_API_SECRET }}
-          ZERODHA_USER_ID:          ${{ secrets.ZERODHA_USER_ID }}
-          ZERODHA_PASSWORD:         ${{ secrets.ZERODHA_PASSWORD }}
-          ZERODHA_TOTP_SECRET:      ${{ secrets.ZERODHA_TOTP_SECRET }}
-          ALERT_EMAIL_FROM:         ${{ secrets.ALERT_EMAIL_FROM }}
+          SHUTDOWN_TIME: "14:55"
+          MANUAL_TRADING: ${{ secrets.MANUAL_TRADING }}
+          PAPER_TRADING: ${{ secrets.PAPER_TRADING }}
+          INITIAL_CAPITAL: ${{ secrets.INITIAL_CAPITAL }}
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          ZERODHA_USER_ID: ${{ secrets.ZERODHA_USER_ID }}
+          ZERODHA_PASSWORD: ${{ secrets.ZERODHA_PASSWORD }}
+          ZERODHA_TOTP_SECRET: ${{ secrets.ZERODHA_TOTP_SECRET }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_EMAIL_APP_PASSWORD: ${{ secrets.ALERT_EMAIL_APP_PASSWORD }}
-          ALERT_EMAIL_TO:           ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
         run: python main.py
 
-      - name: Upload logs as artifact
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
