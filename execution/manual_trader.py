@@ -71,31 +71,45 @@ class ManualTrader:
         qty      = spread_order.qty
         debit    = spread_order.entry_premium
 
-        if debit > 0:
-            target_val = round((1 + signal.profit_target_pct) * debit, 2)
-            stop_val   = round(signal.stop_loss_pct * debit, 2)
-            pricing    = (
-                f"Net cost : Rs.{debit:.2f}/unit  (Rs.{spread_order.total_debit:.2f} total)\n"
-                f"Target   : Rs.{target_val:.2f}/unit spread  (+Rs.{round((target_val-debit)*qty,2):.2f} P&L)\n"
-                f"Stop loss: Rs.{stop_val:.2f}/unit spread   (Rs.{round((stop_val-debit)*qty,2):.2f} P&L)"
-            )
+        entry_spot  = signal.spot
+        stop_nifty  = round(entry_spot * (1 - config.SPOT_MOVE_STOP_PCT))
+        if signal.direction == "bull":
+            target_nifty = spread_order.sell_strike  # spread near max when Nifty > sold strike
         else:
-            pricing = (
+            target_nifty = spread_order.sell_strike  # spread near max when Nifty < sold strike
+
+        if debit > 0:
+            cost_line = f"Net cost : Rs.{debit:.2f}/unit  (Rs.{spread_order.total_debit:.2f} total)"
+        else:
+            cost_line = (
                 f"Max net debit: Rs.{signal.max_premium:.0f}/unit  "
-                f"(Rs.{signal.max_premium * qty:.0f} total for {qty} units)\n"
-                f"Check live price on Kite before placing — only buy if within this limit"
+                f"(Rs.{signal.max_premium * qty:.0f} total)\n"
+                f"Check on Kite — only place if spread cost is within this limit"
             )
+
+        if signal.direction == "bull":
+            stop_line   = f"Nifty BELOW {stop_nifty}  -> EXIT (stop loss)"
+            target_line = f"Nifty ABOVE {target_nifty} -> EXIT (near max profit)"
+        else:
+            stop_line   = f"Nifty ABOVE {stop_nifty}  -> EXIT (stop loss)"
+            target_line = f"Nifty BELOW {target_nifty} -> EXIT (near max profit)"
 
         alert = (
             f"TRADE NOW — {spread_order.direction.upper()} {spread_order.option_type} SPREAD\n"
             f"\n"
-            f"On Kite app place BOTH orders:\n"
+            f"On Kite place BOTH orders:\n"
             f"1. BUY  {buy_sym}  Qty:{qty}  MARKET\n"
             f"2. SELL {sell_sym}  Qty:{qty}  MARKET\n"
             f"\n"
-            f"{pricing}\n"
-            f"Expiry : {spread_order.expiry}\n"
-            f"VIX    : {signal.vix:.1f}"
+            f"{cost_line}\n"
+            f"Expiry : {spread_order.expiry} | VIX: {signal.vix:.1f}\n"
+            f"\n"
+            f"Set Kite alerts on NIFTY 50:\n"
+            f"  {stop_line}\n"
+            f"  {target_line}\n"
+            f"  2:45 PM -> EXIT (bot will email you)\n"
+            f"\n"
+            f"To exit: SELL {buy_sym} + BUY {sell_sym}  Qty:{qty} each"
         )
         logger.info(alert)
         send_alert(alert, title="TRADE NOW", priority="urgent")
@@ -131,39 +145,38 @@ class ManualTrader:
             self._exit(position, "force_exit_3pm", current or 0.0)
             return "force_exit_3pm"
 
-        # If no LTP data, can't check premium-based exits — user monitors on Kite
-        if current is None:
-            logger.debug("[MANUAL] No LTP data — skipping premium/spot exit checks this tick.")
-            return None
+        # Premium-based exits — only when option chain LTP is available
+        if current is not None:
+            entry   = position["entry_premium"]
+            pt_mult = 1 + position.get("profit_target_pct", 1.00)
+            sl_pct  = position.get("stop_loss_pct", 0.50)
 
-        entry   = position["entry_premium"]
-        pt_mult = 1 + position.get("profit_target_pct", 1.00)
-        sl_pct  = position.get("stop_loss_pct", 0.50)
+            if entry > 0:
+                if current >= pt_mult * entry:
+                    self._exit(position, "profit_target", current)
+                    return "profit_target"
 
-        # Only check premium exits if we had a known entry premium
-        if entry > 0:
-            if current >= pt_mult * entry:
-                self._exit(position, "profit_target", current)
-                return "profit_target"
+                if current <= sl_pct * entry:
+                    self._exit(position, "stop_loss", current)
+                    return "stop_loss"
 
-            if current <= sl_pct * entry:
-                self._exit(position, "stop_loss", current)
-                return "stop_loss"
-
-        # Spot move stop
+        # Spot move stop — uses allIndices endpoint which works from cloud even when option chain is blocked
         try:
             spot = self.nse.get_nifty_spot()
             move = (spot - position["entry_spot"]) / position["entry_spot"]
             if position["direction"] == "bull" and move <= -config.SPOT_MOVE_STOP_PCT:
-                self._exit(position, "spot_stop_adverse", current)
+                self._exit(position, "spot_stop_adverse", current or 0.0)
                 return "spot_stop_adverse"
             if position["direction"] == "bear" and move >= config.SPOT_MOVE_STOP_PCT:
-                self._exit(position, "spot_stop_adverse", current)
+                self._exit(position, "spot_stop_adverse", current or 0.0)
                 return "spot_stop_adverse"
         except Exception as e:
             logger.warning(f"Could not fetch spot for stop check: {e}")
 
-        logger.debug(f"[MANUAL] Position open — spread={current:.2f}  entry={entry:.2f}")
+        if current is not None:
+            logger.debug(f"[MANUAL] Position open — spread={current:.2f}  entry={position['entry_premium']:.2f}")
+        else:
+            logger.debug("[MANUAL] Position open — no spread LTP this tick, spot check ran.")
         return None
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
