@@ -33,11 +33,6 @@ class SpreadOrder:
 
 
 def build_spread(nse_client, signal) -> Optional[SpreadOrder]:
-    """
-    Constructs spread parameters. Returns None if:
-      - Net debit exceeds Rs.100/unit (Check 4)
-      - Net debit <= 0 (invalid spread)
-    """
     atm    = _round_to_nearest_50(signal.spot)
     expiry = nse_client.get_weekly_expiry()
 
@@ -49,6 +44,25 @@ def build_spread(nse_client, signal) -> Optional[SpreadOrder]:
         option_type = "PE"
         buy_strike  = atm
         sell_strike = atm - config.SPREAD_WIDTH
+
+    # In manual mode skip LTP fetch — NSE option chain API blocks cloud IPs.
+    # User checks live price on Kite before placing and verifies net debit.
+    if config.MANUAL_TRADING:
+        logger.info(
+            f"Spread: {signal.direction.upper()} {option_type} "
+            f"Buy {buy_strike}  Sell {sell_strike}  Expiry: {expiry}  "
+            f"MaxDebit: Rs.{signal.max_premium}/unit"
+        )
+        return SpreadOrder(
+            direction=signal.direction,
+            option_type=option_type,
+            buy_strike=buy_strike,
+            sell_strike=sell_strike,
+            expiry=expiry,
+            entry_premium=0.0,
+            qty=config.LOT_SIZE,
+            total_debit=0.0,
+        )
 
     buy_ltp   = nse_client.get_option_ltp(buy_strike,  option_type, expiry)
     sell_ltp  = nse_client.get_option_ltp(sell_strike, option_type, expiry)
@@ -68,7 +82,7 @@ def build_spread(nse_client, signal) -> Optional[SpreadOrder]:
         logger.warning(f"Net debit Rs.{net_debit:.2f} <= 0 — invalid spread, skipping.")
         return None
 
-    qty         = config.LOT_SIZE   # always 1 lot, always 65 units
+    qty         = config.LOT_SIZE
     total_debit = round(net_debit * qty, 2)
 
     return SpreadOrder(

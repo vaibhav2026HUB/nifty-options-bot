@@ -66,15 +66,25 @@ class ManualTrader:
         }
         self.risk.record_trade_open(position)
 
-        buy_sym      = _kite_symbol(spread_order.buy_strike,  spread_order.option_type, spread_order.expiry)
-        sell_sym     = _kite_symbol(spread_order.sell_strike, spread_order.option_type, spread_order.expiry)
-        qty          = spread_order.qty
-        debit        = spread_order.entry_premium
-        total        = spread_order.total_debit
-        target_val   = round((1 + signal.profit_target_pct) * debit, 2)
-        stop_val     = round(signal.stop_loss_pct * debit, 2)
-        target_pnl   = round((target_val - debit) * qty, 2)
-        stop_pnl     = round((stop_val - debit) * qty, 2)
+        buy_sym  = _kite_symbol(spread_order.buy_strike,  spread_order.option_type, spread_order.expiry)
+        sell_sym = _kite_symbol(spread_order.sell_strike, spread_order.option_type, spread_order.expiry)
+        qty      = spread_order.qty
+        debit    = spread_order.entry_premium
+
+        if debit > 0:
+            target_val = round((1 + signal.profit_target_pct) * debit, 2)
+            stop_val   = round(signal.stop_loss_pct * debit, 2)
+            pricing    = (
+                f"Net cost : Rs.{debit:.2f}/unit  (Rs.{spread_order.total_debit:.2f} total)\n"
+                f"Target   : Rs.{target_val:.2f}/unit spread  (+Rs.{round((target_val-debit)*qty,2):.2f} P&L)\n"
+                f"Stop loss: Rs.{stop_val:.2f}/unit spread   (Rs.{round((stop_val-debit)*qty,2):.2f} P&L)"
+            )
+        else:
+            pricing = (
+                f"Max net debit: Rs.{signal.max_premium:.0f}/unit  "
+                f"(Rs.{signal.max_premium * qty:.0f} total for {qty} units)\n"
+                f"Check live price on Kite before placing — only buy if within this limit"
+            )
 
         alert = (
             f"TRADE NOW — {spread_order.direction.upper()} {spread_order.option_type} SPREAD\n"
@@ -83,11 +93,9 @@ class ManualTrader:
             f"1. BUY  {buy_sym}  Qty:{qty}  MARKET\n"
             f"2. SELL {sell_sym}  Qty:{qty}  MARKET\n"
             f"\n"
-            f"Net cost : ~Rs.{debit:.2f}/unit  (Rs.{total:.2f} total)\n"
-            f"Target   : Rs.{target_val:.2f}/unit spread  (+Rs.{target_pnl:.2f} P&L)\n"
-            f"Stop loss: Rs.{stop_val:.2f}/unit spread   (Rs.{stop_pnl:.2f} P&L)\n"
-            f"Expiry   : {spread_order.expiry}\n"
-            f"VIX      : {signal.vix:.1f}"
+            f"{pricing}\n"
+            f"Expiry : {spread_order.expiry}\n"
+            f"VIX    : {signal.vix:.1f}"
         )
         logger.info(alert)
         send_alert(alert, title="TRADE NOW", priority="urgent")
@@ -107,31 +115,40 @@ class ManualTrader:
 
         now = datetime.now(IST)
 
-        # Force exit at configured time (default 3:00 PM, 2:45 PM on GitHub Actions)
-        if now.hour > config.FORCE_EXIT_HOUR or (now.hour == config.FORCE_EXIT_HOUR and now.minute >= config.FORCE_EXIT_MINUTE):
-            current = self._current_spread(position)
-            self._exit(position, "force_exit_3pm", current)
-            return "force_exit_3pm"
+        is_force_exit_time = (
+            now.hour > config.FORCE_EXIT_HOUR or
+            (now.hour == config.FORCE_EXIT_HOUR and now.minute >= config.FORCE_EXIT_MINUTE)
+        )
 
+        # Try to get live spread value — NSE option chain may be unavailable on cloud
         try:
             current = self._current_spread(position)
         except Exception as e:
-            logger.warning(f"Could not fetch spread value: {e}")
+            logger.warning(f"Could not fetch spread value (NSE option chain unavailable): {e}")
+            current = None
+
+        if is_force_exit_time:
+            self._exit(position, "force_exit_3pm", current or 0.0)
+            return "force_exit_3pm"
+
+        # If no LTP data, can't check premium-based exits — user monitors on Kite
+        if current is None:
+            logger.debug("[MANUAL] No LTP data — skipping premium/spot exit checks this tick.")
             return None
 
-        entry      = position["entry_premium"]
-        pt_mult    = 1 + position.get("profit_target_pct", 1.00)
-        sl_pct     = position.get("stop_loss_pct", 0.50)
+        entry   = position["entry_premium"]
+        pt_mult = 1 + position.get("profit_target_pct", 1.00)
+        sl_pct  = position.get("stop_loss_pct", 0.50)
 
-        # Profit target
-        if current >= pt_mult * entry:
-            self._exit(position, "profit_target", current)
-            return "profit_target"
+        # Only check premium exits if we had a known entry premium
+        if entry > 0:
+            if current >= pt_mult * entry:
+                self._exit(position, "profit_target", current)
+                return "profit_target"
 
-        # Stop loss
-        if current <= sl_pct * entry:
-            self._exit(position, "stop_loss", current)
-            return "stop_loss"
+            if current <= sl_pct * entry:
+                self._exit(position, "stop_loss", current)
+                return "stop_loss"
 
         # Spot move stop
         try:
@@ -146,10 +163,7 @@ class ManualTrader:
         except Exception as e:
             logger.warning(f"Could not fetch spot for stop check: {e}")
 
-        logger.debug(
-            f"[MANUAL] Position OK — spread={current:.2f} "
-            f"(entry={entry:.2f}  target={pt_mult*entry:.2f}  stop={sl_pct*entry:.2f})"
-        )
+        logger.debug(f"[MANUAL] Position open — spread={current:.2f}  entry={entry:.2f}")
         return None
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
