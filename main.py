@@ -190,19 +190,33 @@ def _is_weekday() -> bool:
     return date.today().weekday() < 5   # Mon=0 … Fri=4
 
 
-def _check_startup_time():
-    """Warn if bot started too late to trade today."""
+def _maybe_catchup():
+    """
+    If bot started between 9:20–11:00 AM IST, run entry check (and execute) immediately
+    instead of skipping the day. Handles GitHub Actions runner delays gracefully.
+    """
     now = datetime.now(IST)
-    if now.hour > 9 or (now.hour == 9 and now.minute >= 20):
-        logger.warning(
-            f"Bot started at {now.strftime('%H:%M')} IST — "
-            f"9:20 AM entry check already passed. No trade today. "
-            f"Restart before 9:20 AM tomorrow."
-        )
-        send_alert(
-            f"[BOT] Started late ({now.strftime('%H:%M')} IST). "
-            f"Entry window missed. No trade today."
-        )
+    after_check   = now.hour > 9 or (now.hour == 9 and now.minute >= 20)
+    before_cutoff = now.hour < 11   # config.LAST_ENTRY_TIME = 11:00
+
+    if not after_check:
+        return  # Started on time — schedule handles everything
+
+    if not before_cutoff:
+        logger.warning(f"Started at {now.strftime('%H:%M')} IST — past 11:00 AM cutoff. No trade today.")
+        return
+
+    logger.info(f"[CATCHUP] Started at {now.strftime('%H:%M')} IST — running entry check now.")
+    job_entry_check()
+
+    after_execute = now.hour >= 10 or (now.hour == 9 and now.minute >= 30)
+    if after_execute:
+        if _signal_cache is not None:
+            logger.info("[CATCHUP] Signal valid — running entry execute in 30 seconds.")
+            time.sleep(30)
+            job_entry_execute()
+        else:
+            logger.info("[CATCHUP] No valid signal — skipping execute.")
 
 
 def _setup_schedule():
@@ -268,8 +282,6 @@ def main():
     state = risk_manager.load_state()
     logger.info(f"Current capital: Rs.{state['capital']:.2f}")
 
-    _check_startup_time()
-
     send_alert(
         f"[BOT] Started — {mode}\n"
         f"Prev close: {_prev_close}\n"
@@ -277,6 +289,7 @@ def main():
     )
 
     _setup_schedule()
+    _maybe_catchup()
 
     logger.info("Running. Press Ctrl+C to stop.")
     while True:
