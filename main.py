@@ -31,6 +31,7 @@ from strategy.signal import get_signal
 from strategy.spread_builder import build_spread
 from risk.risk_manager import RiskManager
 from alerts.notifier import send_alert
+from alerts.telegram_bot import check_commands, send_telegram
 from events.event_calendar import get_upcoming_events
 import journal
 
@@ -186,6 +187,33 @@ def job_shutdown():
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _handle_telegram_command(cmd: str):
+    """Respond to /status and /exit commands sent via Telegram."""
+    if cmd.startswith("/status"):
+        pos = risk_manager.get_open_position()
+        state = risk_manager.load_state()
+        if pos:
+            pnl = pos.get("unrealised_pnl", 0)
+            send_telegram(
+                f"<b>Status</b>\n"
+                f"Position: {pos.get('direction','').upper()} spread open\n"
+                f"Unrealised P&L: Rs.{pnl:+.2f}\n"
+                f"Capital: Rs.{state['capital']:.2f}"
+            )
+        else:
+            send_telegram(
+                f"<b>Status</b>\nNo open position\nCapital: Rs.{state['capital']:.2f}"
+            )
+
+    elif cmd.startswith("/exit"):
+        pos = risk_manager.get_open_position()
+        if pos:
+            send_telegram("Force exit triggered via Telegram...")
+            trader.force_exit("telegram_command")
+        else:
+            send_telegram("No open position to exit.")
+
+
 def _is_weekday() -> bool:
     return date.today().weekday() < 5   # Mon=0 … Fri=4
 
@@ -311,8 +339,14 @@ def main():
     _maybe_catchup()
 
     logger.info("Running. Press Ctrl+C to stop.")
+    _last_cmd_check = 0
     while True:
         schedule.run_pending()
+        now_ts = time.time()
+        if now_ts - _last_cmd_check >= 30:
+            _last_cmd_check = now_ts
+            for cmd in check_commands():
+                _handle_telegram_command(cmd)
         time.sleep(1)
 
 
