@@ -23,6 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps
+
       - name: Restore bot state
         uses: actions/cache@v4
         with:
@@ -41,6 +44,13 @@ jobs:
           MANUAL_TRADING: ${{ secrets.MANUAL_TRADING }}
           PAPER_TRADING: ${{ secrets.PAPER_TRADING }}
           INITIAL_CAPITAL: ${{ secrets.INITIAL_CAPITAL }}
+          BROKER: ${{ secrets.BROKER }}
+          UPSTOX_API_KEY: ${{ secrets.UPSTOX_API_KEY }}
+          UPSTOX_API_SECRET: ${{ secrets.UPSTOX_API_SECRET }}
+          UPSTOX_REDIRECT_URI: ${{ secrets.UPSTOX_REDIRECT_URI }}
+          UPSTOX_MOBILE: ${{ secrets.UPSTOX_MOBILE }}
+          UPSTOX_PIN: ${{ secrets.UPSTOX_PIN }}
+          UPSTOX_TOTP_SECRET: ${{ secrets.UPSTOX_TOTP_SECRET }}
           KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
           KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
           ZERODHA_USER_ID: ${{ secrets.ZERODHA_USER_ID }}
