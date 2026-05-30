@@ -11,10 +11,24 @@ load_dotenv()
 # ─── MODE ──────────────────────────────────────────────────────────────────────
 PAPER_TRADING = os.getenv("PAPER_TRADING", "True").strip().lower() == "true"
 
+# ─── BROKER ────────────────────────────────────────────────────────────────────
+# "upstox"  → fully automatic via Upstox API (requires credentials below)
+# "manual"  → email alerts only, you place orders yourself
+# "kite"    → automatic via Kite Connect (legacy, requires KITE_* vars)
+BROKER = os.getenv("BROKER", "manual").strip().lower()
+
 # ─── CAPITAL ───────────────────────────────────────────────────────────────────
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "32500"))
 
-# ─── KITE CONNECT ──────────────────────────────────────────────────────────────
+# ─── UPSTOX ────────────────────────────────────────────────────────────────────
+UPSTOX_API_KEY      = os.getenv("UPSTOX_API_KEY",      "")
+UPSTOX_API_SECRET   = os.getenv("UPSTOX_API_SECRET",   "")
+UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI", "http://127.0.0.1")
+UPSTOX_MOBILE       = os.getenv("UPSTOX_MOBILE",       "")
+UPSTOX_PIN          = os.getenv("UPSTOX_PIN",          "")
+UPSTOX_TOTP_SECRET  = os.getenv("UPSTOX_TOTP_SECRET",  "")
+
+# ─── KITE CONNECT (legacy) ─────────────────────────────────────────────────────
 KITE_API_KEY    = os.getenv("KITE_API_KEY", "")
 KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
 KITE_TOKEN_FILE = "kite_token.txt"
@@ -29,6 +43,7 @@ SPREAD_WIDTH = 100   # Points between buy strike and sell strike
 # VIX < 11  → always skip (premium too thin)
 # VIX 11–16 → Mon/Wed/Thu | 16–18 → Mon/Thu | 18–20 → Mon only | >20 → skip
 VIX_MIN = 11
+VIX_MAX = 20
 
 # ─── RISK ──────────────────────────────────────────────────────────────────────
 MAX_LOSS_PER_TRADE   = 6500   # ₹6,500 max risk per trade (65 units × ₹100)
@@ -55,9 +70,8 @@ _fet = FORCE_EXIT_TIME.split(":")
 FORCE_EXIT_HOUR   = int(_fet[0])
 FORCE_EXIT_MINUTE = int(_fet[1])
 
-# ─── TRADING MODE ──────────────────────────────────────────────────────────────
-# MANUAL_TRADING=True  → bot alerts you with exact order details, you place on Kite
-# MANUAL_TRADING=False → bot places orders automatically via Kite API
+# ─── TRADING MODE (legacy — use BROKER= instead) ───────────────────────────────
+# MANUAL_TRADING=True  → same as BROKER=manual (kept for backward compatibility)
 MANUAL_TRADING = os.getenv("MANUAL_TRADING", "True").strip().lower() == "true"
 
 # ─── EMAIL ALERTS (Gmail SMTP) ─────────────────────────────────────────────────

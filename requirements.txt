@@ -5,3 +5,4 @@ schedule==1.2.1
 pytz==2024.1
 pyotp==2.9.0
 yfinance==0.2.54
+playwright>=1.40.0

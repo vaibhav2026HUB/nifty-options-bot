@@ -1,8 +1,29 @@
+# Secrets — never commit
 .env
+upstox_token.txt
 kite_token.txt
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
-logs/
+
+# Logs — keep journal and backtest, exclude runtime files
+logs/bot.log
+logs/state.json
+logs/trades.csv
 *.log
 .DS_Store
+
+# Debug screenshots
+debug_*.png
+a1.png
+n1.png
+n2.png
+n3.png
+
+# Claude Code internal
+.claude/
+
+# Docs internal
+docs/

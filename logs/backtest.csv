@@ -1,0 +1,2 @@
+date,index,direction,vix,buy_strike,sell_strike,entry_premium,exit_premium,exit_reason,pnl,market_condition,notes
+2026-03-17,NIFTY,bull,19.79,23350,23450,49.25,64.58,force_exit_3pm,490.47,mid_vix_half_size,qty=32 lot_mult=0.5 spot_930=23367.70 expiry=2026-03-24

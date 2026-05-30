@@ -1,0 +1,10 @@
+date,weekday,trade_taken,no_trade_reason,vix,vix_regime,prev_close,spot_920,direction,atm_strike,buy_strike,sell_strike,option_type,expiry,lot_size,entry_premium,total_debit,profit_target,stop_loss_lvl,exit_time,exit_reason,exit_premium,pnl,capital_before,capital_after,notes
+2026-03-17,Tuesday,yes,-,19.79,mid,23355.6,23380.65,bull,23350,23350,23450,CE,2026-03-24,32,49.25,1576.05,98.5,24.63,15:00,force_exit_3pm,64.58,490.47,32500.0,32990.47,[BACKTEST] lot_mult=0.5
+2026-03-18,Wednesday,no,event_day,0,-,0,0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,FOMC event day
+2026-03-19,Thursday,no,vix_too_high,22.8,high,23764.1,0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,VIX 22.80 > 20
+2026-03-20,Friday,no,vix_too_high,22.81,high,23087.85,0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,VIX 22.81 > 20
+2026-04-08,Wednesday,no,vix_too_high_19.9,19.9,too_high,22968.25,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,
+2026-04-09,Thursday,no,event_day,-,-,23123.65,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,
+2026-05-26,Tuesday,no,expiry_day,-,-,24031.7,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,
+2026-05-27,Wednesday,no,already traded today,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,
+2026-05-29,Friday,no,friday_skip,-,-,23907.15,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,32500.0,32500.0,

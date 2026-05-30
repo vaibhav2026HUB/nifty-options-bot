@@ -1,0 +1,218 @@
+"""
+Upstox OAuth2 authentication with daily token persistence.
+
+Automated flow (headless / GitHub Actions):
+  1. Playwright opens the Upstox auth URL in a headless Chromium browser
+  2. Fills mobile number → PIN → TOTP automatically
+  3. Intercepts the OAuth redirect to extract the one-time auth code
+  4. POSTs to Upstox token endpoint → receives access_token
+  5. Saves upstox_token.txt as: {today's date}\\n{access_token}
+
+Token is valid until 6 AM IST next day. Loaded from file on subsequent calls
+so Playwright only runs once per day.
+
+Required env vars (GitHub Secrets or .env):
+  UPSTOX_API_KEY        from developer.upstox.com → Your Apps → API Key
+  UPSTOX_API_SECRET     from developer.upstox.com → Your Apps → API Secret
+  UPSTOX_REDIRECT_URI   must match what you registered in the developer console
+                        (use http://127.0.0.1 — exactly as registered)
+  UPSTOX_MOBILE         your Upstox registered mobile number (digits only)
+  UPSTOX_PIN            your 6-digit Upstox PIN
+  UPSTOX_TOTP_SECRET    TOTP secret key — from Upstox app → My Profile →
+                        Two Factor Auth → "Can't scan? Use text key"
+
+On auth failure: returns None. main.py falls back to ManualTrader automatically.
+"""
+
+import logging
+import os
+import time
+import requests
+import pyotp
+from datetime import date
+from urllib.parse import urlparse, parse_qs
+
+import config
+
+logger = logging.getLogger(__name__)
+
+TOKEN_FILE = "upstox_token.txt"
+TOKEN_URL  = "https://api.upstox.com/v2/login/authorization/token"
+AUTH_BASE  = "https://api.upstox.com/v2/login/authorization/dialog"
+
+
+def get_upstox_token() -> str | None:
+    """Return a valid access token for today, or None if auth fails."""
+    token = _load_token()
+    if token:
+        logger.info("Loaded today's Upstox token from upstox_token.txt.")
+        return token
+
+    logger.info("No valid token found — starting OAuth login via Playwright.")
+    try:
+        token = _do_oauth_login()
+        _save_token(token)
+        logger.info("Upstox access token obtained and saved.")
+        return token
+    except Exception as e:
+        logger.error(f"Upstox auth failed: {e}")
+        return None
+
+
+def _do_oauth_login() -> str:
+    """Playwright headless OAuth flow. Returns access_token string."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise ImportError(
+            "Run: pip install playwright && playwright install chromium\n"
+            "Or add playwright to requirements.txt and install before running."
+        )
+
+    api_key      = config.UPSTOX_API_KEY
+    api_secret   = config.UPSTOX_API_SECRET
+    redirect_uri = config.UPSTOX_REDIRECT_URI
+    mobile       = config.UPSTOX_MOBILE
+    pin          = config.UPSTOX_PIN
+    totp_secret  = config.UPSTOX_TOTP_SECRET
+
+    missing = [k for k, v in {
+        "UPSTOX_API_KEY": api_key, "UPSTOX_API_SECRET": api_secret,
+        "UPSTOX_REDIRECT_URI": redirect_uri, "UPSTOX_MOBILE": mobile,
+        "UPSTOX_PIN": pin, "UPSTOX_TOTP_SECRET": totp_secret,
+    }.items() if not v]
+    if missing:
+        raise ValueError(f"Missing env vars: {', '.join(missing)}")
+
+    auth_url = (
+        f"{AUTH_BASE}?response_type=code"
+        f"&client_id={api_key}"
+        f"&redirect_uri={redirect_uri}"
+    )
+
+    auth_code = None
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page    = browser.new_page()
+
+        # Capture auth code only from the final registered redirect (127.0.0.1/callback)
+        def on_request(request):
+            nonlocal auth_code
+            url = request.url
+            if url.startswith(redirect_uri) and "code=" in url:
+                params = parse_qs(urlparse(url).query)
+                code   = params.get("code", [None])[0]
+                if code:
+                    auth_code = code
+                    logger.info("Auth code captured from callback redirect.")
+
+        page.on("request", on_request)
+        # Abort the 127.0.0.1 navigation so it doesn't cause a browser error hang
+        page.route("http://127.0.0.1/**", lambda route, req: route.abort())
+
+        logger.info("Opening Upstox auth page...")
+        page.goto(auth_url, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+
+        # Step 1 — Mobile number
+        page.fill("#mobileNum", mobile)
+        page.wait_for_timeout(500)
+        page.get_by_text("Get OTP").click()
+        page.wait_for_timeout(3000)
+
+        # Step 2 — TOTP (use a code with at least 10s of life left)
+        import time as _time
+        remaining = 30 - (_time.time() % 30)
+        if remaining < 10:
+            logger.info(f"TOTP expires in {remaining:.0f}s — waiting for fresh code...")
+            page.wait_for_timeout(int((remaining + 1) * 1000))
+        totp = pyotp.TOTP(totp_secret).now()
+        logger.info(f"TOTP generated with {30 - (_time.time() % 30):.0f}s remaining.")
+        page.fill("#otpNum", totp)
+        page.wait_for_timeout(500)
+        page.get_by_text("Continue").click()
+        page.wait_for_timeout(4000)
+
+        # Step 3 — PIN
+        page.wait_for_selector("#pinCode", timeout=15000)
+        page.fill("#pinCode", pin)
+        page.wait_for_timeout(500)
+        page.get_by_text("Continue").click()
+
+        # Wait for auth code capture (up to 15 seconds)
+        for _ in range(30):
+            if auth_code:
+                break
+            page.wait_for_timeout(500)
+
+        browser.close()
+
+    if not auth_code:
+        raise RuntimeError(
+            "OAuth redirect not captured — login may have failed.\n"
+            "Check credentials. If selectors are broken after a Upstox UI update,\n"
+            "add page.screenshot(path='debug.png') after each step to diagnose."
+        )
+
+    # Exchange auth code for access token
+    payload = {
+        "code":          auth_code,
+        "client_id":     api_key,
+        "client_secret": api_secret,
+        "redirect_uri":  redirect_uri,
+        "grant_type":    "authorization_code",
+    }
+    resp = requests.post(
+        TOKEN_URL,
+        data=payload,
+        headers={
+            "Accept":       "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        timeout=15,
+    )
+    if not resp.ok:
+        body = resp.text
+        if "UDAPI100058" in body:
+            raise RuntimeError(
+                "Upstox account segments are inactive (UDAPI100058).\n"
+                "Fix: Open Upstox app → Profile → Segments → reactivate F&O/Equity.\n"
+                "Or log into upstox.com and follow the reactivation prompt."
+            )
+        raise RuntimeError(f"Token exchange failed {resp.status_code}: {body}")
+    data = resp.json()
+
+    token = data.get("access_token")
+    if not token:
+        raise RuntimeError(f"Token endpoint returned no access_token. Response: {data}")
+    return token
+
+
+def _load_token() -> str | None:
+    if not os.path.exists(TOKEN_FILE):
+        return None
+    with open(TOKEN_FILE) as f:
+        lines = f.read().strip().splitlines()
+    if len(lines) < 2:
+        return None
+    saved_date, token = lines[0], lines[1]
+    if saved_date == str(date.today()):
+        return token
+    logger.info("upstox_token.txt is from a previous day — fresh login required.")
+    return None
+
+
+def _save_token(token: str):
+    with open(TOKEN_FILE, "w") as f:
+        f.write(f"{date.today()}\n{token}")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    result = get_upstox_token()
+    if result:
+        print("\nUpstox access token obtained successfully.")
+        print("upstox_token.txt saved. Bot is ready to run.\n")
+    else:
+        print("\nERROR: Could not obtain Upstox access token. Check .env and try again.\n")

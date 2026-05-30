@@ -30,13 +30,12 @@ _ENABLED = bool(
 
 
 def send_alert(message: str, title: str = "Nifty Bot", priority: str = "default"):
-    """
-    Send an email alert via Gmail SMTP.
-    No-op if email credentials are not configured in .env.
-    priority is accepted but ignored (kept for interface compatibility).
-    """
+    """Send alert via email + Telegram. Either channel failing won't block the other."""
+    from alerts.telegram_bot import send_telegram
+    send_telegram(f"<b>{title}</b>\n{message}")
+
     if not _ENABLED:
-        logger.debug("Email not configured — alert skipped.")
+        logger.debug("Email not configured — skipping email alert.")
         return
     try:
         msg = MIMEMultipart()

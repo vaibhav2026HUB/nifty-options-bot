@@ -45,9 +45,9 @@ def build_spread(nse_client, signal) -> Optional[SpreadOrder]:
         buy_strike  = atm
         sell_strike = atm - config.SPREAD_WIDTH
 
-    # In manual mode skip LTP fetch — NSE option chain API blocks cloud IPs.
-    # User checks live price on Kite before placing and verifies net debit.
-    if config.MANUAL_TRADING:
+    # Skip LTP fetch in manual mode (user verifies price before placing)
+    # and in Upstox mode (UpstoxTrader fetches live prices via Upstox API before placing).
+    if config.MANUAL_TRADING or config.BROKER == "upstox":
         logger.info(
             f"Spread: {signal.direction.upper()} {option_type} "
             f"Buy {buy_strike}  Sell {sell_strike}  Expiry: {expiry}  "

@@ -67,8 +67,8 @@ def _vix_regime(vix):
     if vix < config.VIX_MIN:
         return "too_low"      # < 11: premium too thin
     if vix <= config.VIX_MAX:
-        return "tradeable"    # 11-16: trade zone
-    return "too_high"         # > 16: skip
+        return "tradeable"    # 11-20: trade zone (tiered)
+    return "too_high"         # > 20: skip
 
 
 def log_no_trade(reason: str, vix: float = 0, prev_close: float = 0,

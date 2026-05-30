@@ -102,6 +102,7 @@ class ManualTrader:
             f"2. SELL {sell_sym}  Qty:{qty}  MARKET\n"
             f"\n"
             f"{cost_line}\n"
+            f"Nifty spot : {entry_spot:,.0f}  (prev close: {signal.prev_close:,.0f})\n"
             f"Expiry : {spread_order.expiry} | VIX: {signal.vix:.1f}\n"
             f"\n"
             f"Set Kite alerts on NIFTY 50:\n"

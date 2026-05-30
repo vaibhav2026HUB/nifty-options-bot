@@ -243,7 +243,14 @@ def main():
     global nse_client, trader, risk_manager, _prev_close
 
     logger.info("=" * 55)
-    mode = "MANUAL (alerts only)" if config.MANUAL_TRADING else ("PAPER" if config.PAPER_TRADING else "LIVE")
+    if config.BROKER == "upstox":
+        mode = "UPSTOX LIVE"
+    elif config.MANUAL_TRADING:
+        mode = "MANUAL (alerts only)"
+    elif config.PAPER_TRADING:
+        mode = "PAPER"
+    else:
+        mode = "KITE LIVE"
     logger.info(f"Nifty Options Bot — {mode} mode")
     logger.info("=" * 55)
 
@@ -260,7 +267,19 @@ def main():
         raise SystemExit(1)
     # ─────────────────────────────────────────────────────────────────────────
 
-    if config.MANUAL_TRADING:
+    if config.BROKER == "upstox":
+        from upstox_auth import get_upstox_token
+        from execution.upstox_trader import UpstoxTrader
+        token = get_upstox_token()
+        if token:
+            trader = UpstoxTrader(token, nse_client, risk_manager)
+            logger.info("Upstox live trader ready.")
+        else:
+            logger.warning("Upstox auth failed — falling back to ManualTrader.")
+            send_alert("[BOT] WARNING: Upstox auth failed — running in manual alert mode today.")
+            from execution.manual_trader import ManualTrader
+            trader = ManualTrader(nse_client, risk_manager)
+    elif config.MANUAL_TRADING:
         from execution.manual_trader import ManualTrader
         trader = ManualTrader(nse_client, risk_manager)
         logger.info("Manual trader ready — alerts will be sent to your phone.")
@@ -272,7 +291,7 @@ def main():
         from execution.live_trader import LiveTrader
         kite   = get_kite_client()
         trader = LiveTrader(kite, nse_client, risk_manager)
-        logger.info("Live trader ready.")
+        logger.info("Kite live trader ready.")
 
     # Upcoming event days
     upcoming = get_upcoming_events(7)
