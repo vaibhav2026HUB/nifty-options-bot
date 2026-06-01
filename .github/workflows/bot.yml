@@ -1,8 +1,6 @@
 ﻿name: Nifty Options Bot
 
 on:
-  schedule:
-    - cron: '30 3 * * 1-5'
   workflow_dispatch:
 
 jobs:
