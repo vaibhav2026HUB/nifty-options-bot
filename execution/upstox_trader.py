@@ -229,19 +229,18 @@ class UpstoxTrader:
 
     def _get_ltps(self, buy_key: str, sell_key: str) -> Tuple[float, float]:
         """Fetch live LTPs for both legs in one API call."""
-        resp = requests.get(
-            f"{API_URL}/market-quote/ltp",
-            headers=self._headers(),
-            params={"instrument_key": f"{buy_key},{sell_key}"},
-            timeout=15,
-        )
+        # Build URL manually — requests encodes '|' as %7C which Upstox rejects
+        url = f"{API_URL}/market-quote/ltp?instrument_key={buy_key},{sell_key}"
+        resp = requests.get(url, headers=self._headers(), timeout=15)
         resp.raise_for_status()
         data = resp.json().get("data", {})
+        logger.info(f"[UPSTOX] LTP response keys: {list(data.keys())}")
 
-        # Upstox returns keys with ':' instead of '|' in the response
         def _ltp(key: str) -> float:
             val = data.get(key) or data.get(key.replace("|", ":")) or {}
-            return float(val.get("last_price", 0.0))
+            ltp = float(val.get("last_price", 0.0))
+            logger.info(f"[UPSTOX] LTP {key}: {ltp}")
+            return ltp
 
         return _ltp(buy_key), _ltp(sell_key)
 
