@@ -4,7 +4,7 @@ Entry signal generator — runs all pre-trade checks and returns a Signal.
 VIX tiers:
   VIX < 11       → SKIP  (premium too thin)
   VIX 11–16      → TRADE Mon/Wed/Thu | max_premium=100 | SL=50% | PT=100%
-  VIX 16–18      → TRADE Mon/Thu     | max_premium=80  | SL=40% | PT=75%  | need 0.5% move
+  VIX 16–18      → TRADE Mon/Wed/Thu | max_premium=80  | SL=40% | PT=75%  | need 0.5% move
   VIX 18–20      → TRADE Mon only    | max_premium=70  | SL=35% | PT=65%  | need 0.8% move
   VIX > 20       → SKIP  (too fearful)
 
@@ -38,7 +38,7 @@ class Signal:
 _VIX_TIERS = [
     # (vix_max, max_premium, stop_loss_pct, profit_target_pct, min_move_pct, allowed_days)
     (16, 100, 0.50, 1.00, 0.0, {0, 2, 3}),   # 11–16: Mon/Wed/Thu
-    (18,  80, 0.40, 0.75, 0.5, {0, 3}),       # 16–18: Mon/Thu
+    (18,  80, 0.40, 0.75, 0.5, {0, 2, 3}),     # 16–18: Mon/Wed/Thu
     (20,  70, 0.35, 0.65, 0.8, {0}),          # 18–20: Mon only
 ]
 
