@@ -3,14 +3,14 @@ Entry signal generator — runs all pre-trade checks and returns a Signal.
 
 VIX tiers:
   VIX < 11       → SKIP  (premium too thin)
-  VIX 11–16      → TRADE Mon/Wed/Thu | max_premium=100 | SL=50% | PT=100%
-  VIX 16–18      → TRADE Mon/Wed/Thu | max_premium=80  | SL=40% | PT=75%  | need 0.5% move
-  VIX 18–20      → TRADE Mon only    | max_premium=70  | SL=35% | PT=65%  | need 0.8% move
+  VIX 11–16      → TRADE Mon/Wed/Thu/Fri | max_premium=100 | SL=50% | PT=100%
+  VIX 16–18      → TRADE Mon/Wed/Thu/Fri | max_premium=80  | SL=40% | PT=75%  | need 0.5% move
+  VIX 18–20      → TRADE Mon/Fri only    | max_premium=70  | SL=35% | PT=65%  | need 0.8% move
   VIX > 20       → SKIP  (too fearful)
 
 Day rules (always apply regardless of VIX):
-  Tuesday        → SKIP  (weekly expiry day)
-  Friday         → SKIP  (weekend gap risk)
+  Tuesday        → SKIP  (weekly expiry day — high gamma risk)
+  Friday         → TRADE (bot is intraday only, force-exit 3 PM, no weekend gap risk)
 """
 
 import logging
@@ -37,9 +37,10 @@ class Signal:
 
 _VIX_TIERS = [
     # (vix_max, max_premium, stop_loss_pct, profit_target_pct, min_move_pct, allowed_days)
-    (16, 100, 0.50, 1.00, 0.0, {0, 2, 3}),   # 11–16: Mon/Wed/Thu
-    (18,  80, 0.40, 0.75, 0.5, {0, 2, 3}),     # 16–18: Mon/Wed/Thu
-    (20,  70, 0.35, 0.65, 0.8, {0}),          # 18–20: Mon only
+    # Friday (4) included — bot is intraday only (force-exit 3 PM), no weekend gap risk
+    (16, 100, 0.50, 1.00, 0.0, {0, 2, 3, 4}),   # 11–16: Mon/Wed/Thu/Fri
+    (18,  80, 0.40, 0.75, 0.5, {0, 2, 3, 4}),   # 16–18: Mon/Wed/Thu/Fri
+    (20,  70, 0.35, 0.65, 0.8, {0, 4}),          # 18–20: Mon/Fri
 ]
 
 
@@ -47,13 +48,10 @@ def get_signal(nse_client, prev_close: float) -> Signal:
     today = date.today()
     dow   = today.weekday()   # 0=Mon … 4=Fri
 
-    # Check 1 — Tuesday (expiry) and Friday (weekend gap risk)
+    # Check 1 — Tuesday (expiry day, high gamma risk)
     if dow == 1:
         logger.info("Tuesday expiry day — no trade.")
         return Signal(None, 0.0, 0.0, prev_close, "expiry_day")
-    if dow == 4:
-        logger.info("Friday — weekend gap risk, no trade.")
-        return Signal(None, 0.0, 0.0, prev_close, "friday_skip")
 
     # Check 2 — Event day
     if is_event_day(today):

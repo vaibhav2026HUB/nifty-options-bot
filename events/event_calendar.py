@@ -50,17 +50,17 @@ NO_TRADE_DATES = {
     date(2026, 12, 3),   # RBI MPC                   [VERIFY]
 
     # ─── FOMC Meeting Result Days 2026 ───────────────────────────────────────
-    # US Fed rate decisions — Indian markets react sharply on these days.
-    # Announcement is on Day 2 of each 2-day meeting.
+    # US Fed announces at 2 PM ET = 11:30 PM IST — after Indian markets close.
+    # Impact hits Indian markets the NEXT morning (gap open). Block day AFTER.
     # VERIFY at federalreserve.gov/monetarypolicy/fomccalendars.htm
-    date(2026, 1, 28),   # FOMC                      [VERIFY]
-    date(2026, 3, 18),   # FOMC                      [VERIFY]
-    date(2026, 4, 29),   # FOMC                      [VERIFY]
-    date(2026, 6, 10),   # FOMC                      [VERIFY]
-    date(2026, 7, 29),   # FOMC                      [VERIFY]
-    date(2026, 9, 16),   # FOMC                      [VERIFY]
-    date(2026, 10, 28),  # FOMC                      [VERIFY]
-    date(2026, 12, 9),   # FOMC                      [VERIFY]
+    date(2026, 1, 29),   # FOMC +1                   [VERIFY]
+    date(2026, 3, 19),   # FOMC +1                   [VERIFY]
+    date(2026, 4, 30),   # FOMC +1                   [VERIFY]
+    # 2026-06-11 removed — FOMC result already known by Indian market open; VIX captures residual uncertainty
+    date(2026, 7, 30),   # FOMC +1                   [VERIFY]
+    date(2026, 9, 17),   # FOMC +1                   [VERIFY]
+    date(2026, 10, 29),  # FOMC +1                   [VERIFY]
+    date(2026, 12, 10),  # FOMC +1                   [VERIFY]
 }
 
 

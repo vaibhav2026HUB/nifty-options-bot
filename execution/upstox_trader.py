@@ -60,7 +60,10 @@ class UpstoxTrader:
                 expiry_upstox,
             )
 
-            buy_ltp, sell_ltp = self._get_ltps(buy_key, sell_key)
+            buy_ltp, sell_ltp = self._get_ltps(
+                buy_key, sell_key,
+                spread_order.buy_strike, spread_order.sell_strike,
+            )
             net_debit = round(buy_ltp - sell_ltp, 2)
             logger.info(
                 f"[UPSTOX] Pre-trade: buy_ltp={buy_ltp:.2f}  sell_ltp={sell_ltp:.2f}  "
@@ -164,16 +167,19 @@ class UpstoxTrader:
             self._exit(position, "stop_loss", current_spread)
             return "stop_loss"
 
-        current_spot = self.nse.get_nifty_spot()
-        spot_move    = (current_spot - position["entry_spot"]) / position["entry_spot"]
+        try:
+            current_spot = self.nse.get_nifty_spot()
+            spot_move    = (current_spot - position["entry_spot"]) / position["entry_spot"]
 
-        if position["direction"] == "bull" and spot_move <= -config.SPOT_MOVE_STOP_PCT:
-            self._exit(position, "spot_stop_adverse", current_spread)
-            return "spot_stop_adverse"
+            if position["direction"] == "bull" and spot_move <= -config.SPOT_MOVE_STOP_PCT:
+                self._exit(position, "spot_stop_adverse", current_spread)
+                return "spot_stop_adverse"
 
-        if position["direction"] == "bear" and spot_move >= config.SPOT_MOVE_STOP_PCT:
-            self._exit(position, "spot_stop_adverse", current_spread)
-            return "spot_stop_adverse"
+            if position["direction"] == "bear" and spot_move >= config.SPOT_MOVE_STOP_PCT:
+                self._exit(position, "spot_stop_adverse", current_spread)
+                return "spot_stop_adverse"
+        except Exception as e:
+            logger.warning(f"Spot-move stop skipped this cycle (NSE unavailable): {e}")
 
         logger.debug(
             f"[UPSTOX] Position OK — spread={current_spread:.2f} "
@@ -227,25 +233,57 @@ class UpstoxTrader:
             )
         return buy_key, sell_key
 
-    def _get_ltps(self, buy_key: str, sell_key: str) -> Tuple[float, float]:
-        """Fetch live LTPs for both legs in one API call."""
-        # Build URL manually — requests encodes '|' as %7C which Upstox rejects
+    def _get_ltps(self, buy_key: str, sell_key: str, buy_strike: int = 0, sell_strike: int = 0) -> Tuple[float, float]:
+        """Fetch live LTPs for both legs. Retries up to 3 times if response is empty."""
+        import time as _time
         url = f"{API_URL}/market-quote/ltp?instrument_key={buy_key},{sell_key}"
-        resp = requests.get(url, headers=self._headers(), timeout=15)
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
+
+        data = {}
+        for attempt in range(1, 4):
+            resp = requests.get(url, headers=self._headers(), timeout=15)
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            if data:
+                break
+            logger.warning(f"[UPSTOX] LTP response empty (attempt {attempt}/3) — retrying in 2s")
+            _time.sleep(2)
+
+        if not data:
+            raise ValueError(
+                f"[UPSTOX] LTP API returned empty data after 3 attempts. "
+                f"Keys requested: {buy_key}, {sell_key}. Market may be closed or API issue."
+            )
+
         logger.info(f"[UPSTOX] LTP response keys: {list(data.keys())}")
 
+        # Upstox returns symbol-format keys (e.g. NSE_FO:NIFTY2661623400CE)
+        # regardless of whether numeric or symbol keys were used in the request.
+        # Match each response entry to buy/sell leg by the strike number embedded
+        # in the key string.
+        if buy_strike and sell_strike:
+            buy_ltp = sell_ltp = 0.0
+            for resp_key, val in data.items():
+                ltp = float(val.get("last_price", 0.0))
+                if str(buy_strike) in resp_key:
+                    buy_ltp = ltp
+                    logger.info(f"[UPSTOX] buy LTP ({buy_strike}): {ltp}")
+                elif str(sell_strike) in resp_key:
+                    sell_ltp = ltp
+                    logger.info(f"[UPSTOX] sell LTP ({sell_strike}): {ltp}")
+            return buy_ltp, sell_ltp
+
+        # Fallback: direct key lookup with | → : conversion
         def _ltp(key: str) -> float:
             val = data.get(key) or data.get(key.replace("|", ":")) or {}
-            ltp = float(val.get("last_price", 0.0))
-            logger.info(f"[UPSTOX] LTP {key}: {ltp}")
-            return ltp
+            return float(val.get("last_price", 0.0))
 
         return _ltp(buy_key), _ltp(sell_key)
 
     def _current_spread(self, position: dict) -> float:
-        buy_ltp, sell_ltp = self._get_ltps(position["buy_key"], position["sell_key"])
+        buy_ltp, sell_ltp = self._get_ltps(
+            position["buy_key"], position["sell_key"],
+            position["buy_strike"], position["sell_strike"],
+        )
         return buy_ltp - sell_ltp
 
     def _place_order(self, side: str, instrument_key: str, qty: int) -> Optional[str]:
@@ -258,7 +296,7 @@ class UpstoxTrader:
                 "validity":           "DAY",
                 "price":              0,
                 "tag":                "nifty_bot",
-                "instrument_token":   instrument_key,
+                "instrument_key":      instrument_key,
                 "order_type":         "MARKET",
                 "transaction_type":   side,
                 "disclosed_quantity": 0,

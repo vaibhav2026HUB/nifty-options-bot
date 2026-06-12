@@ -161,7 +161,10 @@ def job_exit_check():
     if risk_manager.get_open_position() is None:
         return
 
-    trader.check_exits()
+    try:
+        trader.check_exits()
+    except Exception as e:
+        logger.warning(f"Exit check skipped this cycle: {e}")
 
 
 def job_eod_summary():
@@ -296,7 +299,8 @@ def main():
     # ─────────────────────────────────────────────────────────────────────────
 
     if config.BROKER == "upstox":
-        from upstox_auth import get_upstox_token
+        from upstox_auth import get_upstox_token, check_ip_changed
+        check_ip_changed()  # alerts + logs if IP has changed since last token save
         from execution.upstox_trader import UpstoxTrader
         token = get_upstox_token()
         if token:

@@ -88,6 +88,7 @@ def _do_oauth_login() -> str:
         f"{AUTH_BASE}?response_type=code"
         f"&client_id={api_key}"
         f"&redirect_uri={redirect_uri}"
+        f"&scope=orders"
     )
 
     auth_code = None
@@ -189,23 +190,75 @@ def _do_oauth_login() -> str:
     return token
 
 
+def get_public_ip() -> str:
+    """Return current public IP. Falls back to empty string on failure."""
+    try:
+        return requests.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception:
+        return ""
+
+
+def check_ip_changed() -> bool:
+    """
+    Returns True if the public IP has changed since the token was saved.
+    Sends an urgent alert with the new IP and update instructions if so.
+    """
+    if not os.path.exists(TOKEN_FILE):
+        return False
+    with open(TOKEN_FILE) as f:
+        lines = f.read().strip().splitlines()
+    if len(lines) < 3:
+        return False
+
+    saved_ip = lines[1]
+    current_ip = get_public_ip()
+
+    if not current_ip or current_ip == saved_ip:
+        return False
+
+    msg = (
+        f"URGENT [BOT] Public IP changed!\n"
+        f"Old IP: {saved_ip}\n"
+        f"New IP: {current_ip}\n\n"
+        f"Action required before 9:20 AM:\n"
+        f"1. Go to developer.upstox.com\n"
+        f"2. Edit app NiftyBot → Primary IP\n"
+        f"3. Replace with: {current_ip}\n"
+        f"4. Save — bot will retry auth automatically."
+    )
+    logger.warning(msg)
+
+    try:
+        from alerts.notifier import send_alert
+        send_alert(msg)
+    except Exception:
+        pass
+
+    return True
+
+
 def _load_token() -> str | None:
     if not os.path.exists(TOKEN_FILE):
         return None
     with open(TOKEN_FILE) as f:
         lines = f.read().strip().splitlines()
-    if len(lines) < 2:
+    if len(lines) < 3:
         return None
-    saved_date, token = lines[0], lines[1]
-    if saved_date == str(date.today()):
-        return token
-    logger.info("upstox_token.txt is from a previous day — fresh login required.")
-    return None
+    saved_date, saved_ip, token = lines[0], lines[1], lines[2]
+    if saved_date != str(date.today()):
+        logger.info("upstox_token.txt is from a previous day — fresh login required.")
+        return None
+    current_ip = get_public_ip()
+    if current_ip and current_ip != saved_ip:
+        logger.warning(f"IP changed ({saved_ip} → {current_ip}) — token invalidated, re-login required.")
+        return None
+    return token
 
 
 def _save_token(token: str):
+    ip = get_public_ip()
     with open(TOKEN_FILE, "w") as f:
-        f.write(f"{date.today()}\n{token}")
+        f.write(f"{date.today()}\n{ip}\n{token}")
 
 
 if __name__ == "__main__":
