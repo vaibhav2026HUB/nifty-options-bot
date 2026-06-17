@@ -82,6 +82,24 @@ class UpstoxTrader:
             spread_order.entry_premium = net_debit
             spread_order.total_debit   = round(net_debit * spread_order.qty, 2)
 
+            pt_premium = round(net_debit * (1 + signal.profit_target_pct), 2)
+            sl_premium = round(net_debit * signal.stop_loss_pct, 2)
+            send_alert(
+                f"[BOT] TRADE ABOUT TO EXECUTE — {spread_order.direction.upper()} SPREAD\n"
+                f"\n"
+                f"BUY  : NIFTY {spread_order.expiry} {spread_order.buy_strike} {spread_order.option_type}  "
+                f"| 1 lot ({spread_order.qty} units) | LTP ~Rs.{buy_ltp:.2f}\n"
+                f"SELL : NIFTY {spread_order.expiry} {spread_order.sell_strike} {spread_order.option_type}  "
+                f"| 1 lot ({spread_order.qty} units) | LTP ~Rs.{sell_ltp:.2f}\n"
+                f"\n"
+                f"Net debit : Rs.{net_debit:.2f}/unit  (Rs.{spread_order.total_debit:.2f} total)\n"
+                f"Profit target : exit when spread >= Rs.{pt_premium:.2f}/unit\n"
+                f"Stop loss     : exit when spread <= Rs.{sl_premium:.2f}/unit\n"
+                f"Force exit    : 3:00 PM IST\n"
+                f"VIX: {signal.vix:.1f}",
+                title="TRADE SIGNAL",
+            )
+
             logger.info(f"[UPSTOX] Placing BUY  leg: {buy_key}  qty={spread_order.qty}")
             buy_oid = self._place_order("BUY", buy_key, spread_order.qty)
             if not buy_oid:
