@@ -42,7 +42,21 @@ AUTH_BASE  = "https://api.upstox.com/v2/login/authorization/dialog"
 
 
 def get_upstox_token() -> str | None:
-    """Return a valid access token for today, or None if auth fails."""
+    """Return a valid access token for today, or None if auth fails.
+
+    Priority order:
+      1. UPSTOX_ACCESS_TOKEN env var — manual override, bypasses Playwright entirely.
+         Set this GitHub Secret if Playwright ever breaks. Generate the value by
+         running `python upstox_auth.py` locally and copying the token from
+         upstox_token.txt (3rd line).
+      2. upstox_token.txt cached from today's earlier run.
+      3. Fresh Playwright OAuth login.
+    """
+    override = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
+    if override:
+        logger.info("Using UPSTOX_ACCESS_TOKEN from environment (Playwright bypassed).")
+        return override
+
     token = _load_token()
     if token:
         logger.info("Loaded today's Upstox token from upstox_token.txt.")
@@ -59,8 +73,30 @@ def get_upstox_token() -> str | None:
         return None
 
 
+def _fill_robust(page, selectors: list, value: str, step: str) -> None:
+    """Try each selector in order. Takes a screenshot and raises if all fail."""
+    import os as _os
+    _os.makedirs("logs", exist_ok=True)
+    for sel in selectors:
+        try:
+            page.fill(sel, value, timeout=4000)
+            logger.info(f"[AUTH] {step} filled via selector: {sel}")
+            return
+        except Exception:
+            continue
+    page.screenshot(path=f"logs/auth_fail_{step}.png")
+    raise RuntimeError(
+        f"[AUTH] Could not fill {step} — all selectors failed: {selectors}\n"
+        f"Screenshot saved to logs/auth_fail_{step}.png\n"
+        f"Page URL: {page.url}"
+    )
+
+
 def _do_oauth_login() -> str:
     """Playwright headless OAuth flow. Returns access_token string."""
+    import os as _os
+    _os.makedirs("logs", exist_ok=True)
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -97,7 +133,6 @@ def _do_oauth_login() -> str:
         browser = p.chromium.launch(headless=True)
         page    = browser.new_page()
 
-        # Capture auth code only from the final registered redirect (127.0.0.1/callback)
         def on_request(request):
             nonlocal auth_code
             url = request.url
@@ -109,20 +144,27 @@ def _do_oauth_login() -> str:
                     logger.info("Auth code captured from callback redirect.")
 
         page.on("request", on_request)
-        # Abort the 127.0.0.1 navigation so it doesn't cause a browser error hang
         page.route("http://127.0.0.1/**", lambda route, req: route.abort())
 
         logger.info("Opening Upstox auth page...")
         page.goto(auth_url, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
+        page.screenshot(path="logs/auth_step1_loaded.png")
 
-        # Step 1 — Mobile number
-        page.fill("#mobileNum", mobile)
+        # Step 1 — Mobile number (fallback selectors in priority order)
+        _fill_robust(page, [
+            "#mobileNum",
+            "input[type='number']",
+            "input[type='tel']",
+            "input[placeholder*='mobile' i]",
+            "input[placeholder*='number' i]",
+        ], mobile, "mobile")
         page.wait_for_timeout(500)
         page.get_by_text("Get OTP").click()
         page.wait_for_timeout(3000)
+        page.screenshot(path="logs/auth_step2_after_getotp.png")
 
-        # Step 2 — TOTP (use a code with at least 10s of life left)
+        # Step 2 — TOTP (ensure code has at least 10s of life left)
         import time as _time
         remaining = 30 - (_time.time() % 30)
         if remaining < 10:
@@ -130,16 +172,31 @@ def _do_oauth_login() -> str:
             page.wait_for_timeout(int((remaining + 1) * 1000))
         totp = pyotp.TOTP(totp_secret).now()
         logger.info(f"TOTP generated with {30 - (_time.time() % 30):.0f}s remaining.")
-        page.fill("#otpNum", totp)
+        _fill_robust(page, [
+            "#otpNum",
+            "input[type='number'][maxlength='6']",
+            "input[placeholder*='otp' i]",
+            "input[placeholder*='code' i]",
+        ], totp, "totp")
         page.wait_for_timeout(500)
         page.get_by_text("Continue").click()
         page.wait_for_timeout(4000)
+        page.screenshot(path="logs/auth_step3_after_totp.png")
 
         # Step 3 — PIN
-        page.wait_for_selector("#pinCode", timeout=15000)
-        page.fill("#pinCode", pin)
+        try:
+            page.wait_for_selector("#pinCode", timeout=15000)
+        except Exception:
+            pass  # selector might have changed — _fill_robust will handle it
+        _fill_robust(page, [
+            "#pinCode",
+            "input[type='password']",
+            "input[placeholder*='pin' i]",
+            "input[placeholder*='passcode' i]",
+        ], pin, "pin")
         page.wait_for_timeout(500)
         page.get_by_text("Continue").click()
+        page.screenshot(path="logs/auth_step4_after_pin.png")
 
         # Wait for auth code capture (up to 15 seconds)
         for _ in range(30):
@@ -152,8 +209,7 @@ def _do_oauth_login() -> str:
     if not auth_code:
         raise RuntimeError(
             "OAuth redirect not captured — login may have failed.\n"
-            "Check credentials. If selectors are broken after a Upstox UI update,\n"
-            "add page.screenshot(path='debug.png') after each step to diagnose."
+            "Check logs/auth_step*.png screenshots (uploaded as GitHub Actions artifacts)."
         )
 
     # Exchange auth code for access token
