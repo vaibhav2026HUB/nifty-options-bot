@@ -236,7 +236,34 @@ class UpstoxTrader:
         logger.error("[UPSTOX] Token refresh failed.")
         return False
 
-    def _get_ltps(self, buy_key: str, sell_key: str, buy_strike: int = 0, sell_strike: int = 0) -> Tuple[float, float]:
+    def _upstox_has_position(self, position: dict) -> bool:
+        """Check Upstox portfolio to confirm whether our position actually exists.
+        Returns True (position is real) if confirmed or if the check itself fails.
+        Returns False only when portfolio explicitly shows no matching position.
+        """
+        try:
+            resp = requests.get(
+                f"{API_URL}/portfolio/short-term-positions",
+                headers=self._headers(),
+                timeout=10,
+            )
+            if not resp.ok:
+                logger.warning(f"[UPSTOX] Portfolio check returned {resp.status_code} — assuming position is real.")
+                return True
+            positions = resp.json().get("data", [])
+            if not positions:
+                return False
+            buy_strike = str(position["buy_strike"])
+            for p in positions:
+                token_str = str(p.get("instrument_token", "")) + str(p.get("instrument_key", ""))
+                if buy_strike in token_str:
+                    return True
+            return False
+        except Exception as e:
+            logger.warning(f"[UPSTOX] Portfolio check failed: {e} — assuming position is real.")
+            return True
+
+    def _get_ltps(self, buy_key: str, sell_key: str, buy_strike: int = 0, sell_strike: int = 0, _retry: bool = True) -> Tuple[float, float]:
         """Fetch live LTPs for both legs. Retries up to 3 times if response is empty."""
         import time as _time
         url = f"{API_URL}/market-quote/ltp?instrument_key={buy_key},{sell_key}"
@@ -244,6 +271,11 @@ class UpstoxTrader:
         data = {}
         for attempt in range(1, 4):
             resp = requests.get(url, headers=self._headers(), timeout=15)
+            if resp.status_code in (401, 403) and _retry:
+                logger.warning(f"[UPSTOX] {resp.status_code} on LTP — refreshing token and retrying once...")
+                if self._refresh_token():
+                    return self._get_ltps(buy_key, sell_key, buy_strike, sell_strike, _retry=False)
+                break
             resp.raise_for_status()
             data = resp.json().get("data", {})
             if data:
@@ -329,16 +361,23 @@ class UpstoxTrader:
             # 403 after auto-retry means Upstox has no matching position — stale state.
             # Clear it so the bot stops hammering a non-existent position every 60s.
             if "403" in err or "401" in err:
-                logger.warning(
-                    "[UPSTOX] Position not found in Upstox after token refresh. "
-                    "Clearing stale open_position from state.json."
-                )
-                self.risk.record_trade_close(0.0)
-                send_alert(
-                    f"[UPSTOX] Stale position cleared from state (Upstox had no matching position).\n"
-                    f"Check your Upstox app — position may have been auto-squared off.\n"
-                    f"Reason attempted: {reason}"
-                )
+                if self._upstox_has_position(position):
+                    send_alert(
+                        f"URGENT [UPSTOX] EXIT FAILED — position IS open in Upstox but cannot close.\n"
+                        f"CLOSE MANUALLY NOW:\n"
+                        f"  SELL {position['buy_strike']} {position.get('option_type','?')} "
+                        f"(your buy leg)\n"
+                        f"  BUY  {position['sell_strike']} {position.get('option_type','?')} "
+                        f"(your sell leg)\n"
+                        f"Reason triggered: {reason}"
+                    )
+                else:
+                    logger.warning("[UPSTOX] Portfolio confirms no open position — clearing stale state.")
+                    self.risk.record_trade_close(0.0)
+                    send_alert(
+                        "[UPSTOX] Stale position cleared — Upstox portfolio shows nothing open.\n"
+                        "Verify your Upstox app is flat."
+                    )
             else:
                 send_alert(
                     f"URGENT [UPSTOX] EXIT ORDERS FAILED — CLOSE MANUALLY ON UPSTOX NOW\n"

@@ -289,13 +289,20 @@ def main():
     risk_manager = RiskManager()
 
     # ── Fetch previous day close from NSE automatically ───────────────────────
-    try:
-        _prev_close = nse_client.get_prev_close()
-        logger.info(f"Previous close fetched: {_prev_close}")
-    except Exception as e:
-        logger.error(f"Could not fetch prev_close from NSE: {e}")
-        logger.error("Bot cannot determine trade direction. Exiting.")
-        raise SystemExit(1)
+    for _attempt in range(1, 4):
+        try:
+            _prev_close = nse_client.get_prev_close()
+            logger.info(f"Previous close fetched: {_prev_close}")
+            break
+        except Exception as e:
+            logger.warning(f"NSE prev_close attempt {_attempt}/3 failed: {e}")
+            if _attempt < 3:
+                logger.info("Retrying in 20s...")
+                time.sleep(20)
+            else:
+                logger.error("NSE unavailable after 3 attempts — cannot start today.")
+                send_alert("[BOT] CRITICAL: NSE API down after 3 retries. Bot could not start today.")
+                raise SystemExit(1)
     # ─────────────────────────────────────────────────────────────────────────
 
     if config.BROKER == "upstox":
