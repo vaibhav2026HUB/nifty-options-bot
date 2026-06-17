@@ -53,12 +53,8 @@ class UpstoxTrader:
         try:
             expiry_upstox = _nse_to_upstox_date(spread_order.expiry)
 
-            buy_key, sell_key = self._get_instrument_keys(
-                spread_order.buy_strike,
-                spread_order.sell_strike,
-                spread_order.option_type,
-                expiry_upstox,
-            )
+            buy_key  = self._build_instrument_key(spread_order.buy_strike,  spread_order.option_type, expiry_upstox)
+            sell_key = self._build_instrument_key(spread_order.sell_strike, spread_order.option_type, expiry_upstox)
 
             buy_ltp, sell_ltp = self._get_ltps(
                 buy_key, sell_key,
@@ -195,43 +191,32 @@ class UpstoxTrader:
             "Accept":        "application/json",
         }
 
-    def _get_instrument_keys(
-        self, buy_strike: int, sell_strike: int, option_type: str, expiry: str
-    ) -> Tuple[str, str]:
-        """Fetch Upstox instrument_keys for both legs from the option chain API."""
-        resp = requests.get(
-            f"{API_URL}/option/chain",
-            headers=self._headers(),
-            params={"instrument_key": "NSE_INDEX|Nifty 50", "expiry_date": expiry},
-            timeout=15,
-        )
-        resp.raise_for_status()
+    def _build_instrument_key(self, strike: int, option_type: str, expiry_upstox: str) -> str:
+        """Construct Upstox NSE_FO instrument key directly — no API call needed.
+        Format confirmed from logs: NSE_FO|NIFTY{YY}{M}{DD}{STRIKE}{TYPE}
+        where M is month without leading zero (6 not 06).
+        Example: NSE_FO|NIFTY2661623050PE → NIFTY 23050 PE expiring 2026-06-16
+        """
+        dt = datetime.strptime(expiry_upstox, "%Y-%m-%d")
+        yy = dt.strftime("%y")    # "26"
+        m  = str(dt.month)         # "6" (no leading zero — confirmed from logs)
+        dd = dt.strftime("%d")    # "16"
+        return f"NSE_FO|NIFTY{yy}{m}{dd}{strike}{option_type}"
 
-        key_field = "call_options" if option_type == "CE" else "put_options"
-        buy_key = sell_key = None
-
-        for entry in resp.json().get("data", []):
-            strike = entry.get("strike_price")
-            ikey   = entry.get(key_field, {}).get("instrument_key")
-            if ikey:
-                if strike == buy_strike:
-                    buy_key = ikey
-                elif strike == sell_strike:
-                    sell_key = ikey
-            if buy_key and sell_key:
-                break
-
-        if not buy_key:
-            raise ValueError(
-                f"Instrument key not found for {option_type} {buy_strike} "
-                f"expiry={expiry}. Check that the expiry is correct."
-            )
-        if not sell_key:
-            raise ValueError(
-                f"Instrument key not found for {option_type} {sell_strike} "
-                f"expiry={expiry}."
-            )
-        return buy_key, sell_key
+    def _refresh_token(self) -> bool:
+        """Force a fresh Upstox OAuth login and update self.token. Returns True on success."""
+        import os
+        token_file = "upstox_token.txt"
+        if os.path.exists(token_file):
+            os.remove(token_file)
+        from upstox_auth import get_upstox_token
+        new_token = get_upstox_token()
+        if new_token:
+            self.token = new_token
+            logger.info("[UPSTOX] Token refreshed successfully.")
+            return True
+        logger.error("[UPSTOX] Token refresh failed.")
+        return False
 
     def _get_ltps(self, buy_key: str, sell_key: str, buy_strike: int = 0, sell_strike: int = 0) -> Tuple[float, float]:
         """Fetch live LTPs for both legs. Retries up to 3 times if response is empty."""
@@ -286,7 +271,7 @@ class UpstoxTrader:
         )
         return buy_ltp - sell_ltp
 
-    def _place_order(self, side: str, instrument_key: str, qty: int) -> Optional[str]:
+    def _place_order(self, side: str, instrument_key: str, qty: int, _retry: bool = True) -> Optional[str]:
         resp = requests.post(
             f"{API_URL}/order/place",
             headers={**self._headers(), "Content-Type": "application/json"},
@@ -296,7 +281,7 @@ class UpstoxTrader:
                 "validity":           "DAY",
                 "price":              0,
                 "tag":                "nifty_bot",
-                "instrument_key":      instrument_key,
+                "instrument_key":     instrument_key,
                 "order_type":         "MARKET",
                 "transaction_type":   side,
                 "disclosed_quantity": 0,
@@ -305,6 +290,10 @@ class UpstoxTrader:
             },
             timeout=15,
         )
+        if resp.status_code in (401, 403) and _retry:
+            logger.warning(f"[UPSTOX] {resp.status_code} on order — refreshing token and retrying once...")
+            if self._refresh_token():
+                return self._place_order(side, instrument_key, qty, _retry=False)
         resp.raise_for_status()
         return resp.json().get("data", {}).get("order_id")
 
@@ -318,10 +307,25 @@ class UpstoxTrader:
             self._place_order("BUY",  sell_key, qty)  # close sell leg
         except Exception as e:
             logger.error(f"[UPSTOX] EXIT ORDERS FAILED: {e}")
-            send_alert(
-                f"URGENT [UPSTOX] EXIT ORDERS FAILED — CLOSE MANUALLY ON UPSTOX NOW\n"
-                f"Reason: {reason}\n{e}"
-            )
+            err = str(e)
+            # 403 after auto-retry means Upstox has no matching position — stale state.
+            # Clear it so the bot stops hammering a non-existent position every 60s.
+            if "403" in err or "401" in err:
+                logger.warning(
+                    "[UPSTOX] Position not found in Upstox after token refresh. "
+                    "Clearing stale open_position from state.json."
+                )
+                self.risk.record_trade_close(0.0)
+                send_alert(
+                    f"[UPSTOX] Stale position cleared from state (Upstox had no matching position).\n"
+                    f"Check your Upstox app — position may have been auto-squared off.\n"
+                    f"Reason attempted: {reason}"
+                )
+            else:
+                send_alert(
+                    f"URGENT [UPSTOX] EXIT ORDERS FAILED — CLOSE MANUALLY ON UPSTOX NOW\n"
+                    f"Reason: {reason}\n{e}"
+                )
             return
 
         pnl     = round((exit_premium - position["entry_premium"]) * qty, 2)
