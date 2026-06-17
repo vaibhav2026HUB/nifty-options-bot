@@ -222,13 +222,22 @@ class UpstoxTrader:
         return f"NSE_FO|NIFTY{yy}{m}{dd}{strike}{option_type}"
 
     def _refresh_token(self) -> bool:
-        """Force a fresh Upstox OAuth login and update self.token. Returns True on success."""
+        """Force a fresh Upstox OAuth login and update self.token. Returns True on success.
+        Always runs Playwright — ignores UPSTOX_ACCESS_TOKEN so we don't loop on a
+        stale override token that's already failing.
+        """
         import os
         token_file = "upstox_token.txt"
         if os.path.exists(token_file):
             os.remove(token_file)
-        from upstox_auth import get_upstox_token
-        new_token = get_upstox_token()
+        # Temporarily unset the env override so get_upstox_token goes to Playwright
+        override = os.environ.pop("UPSTOX_ACCESS_TOKEN", None)
+        try:
+            from upstox_auth import get_upstox_token
+            new_token = get_upstox_token()
+        finally:
+            if override:
+                os.environ["UPSTOX_ACCESS_TOKEN"] = override
         if new_token:
             self.token = new_token
             logger.info("[UPSTOX] Token refreshed successfully.")
