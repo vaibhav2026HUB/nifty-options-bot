@@ -211,15 +211,16 @@ class UpstoxTrader:
 
     def _build_instrument_key(self, strike: int, option_type: str, expiry_upstox: str) -> str:
         """Construct Upstox NSE_FO instrument key directly — no API call needed.
-        Format confirmed from logs: NSE_FO|NIFTY{YY}{M}{DD}{STRIKE}{TYPE}
+        Format confirmed from logs: NSE_FO:NIFTY{YY}{M}{DD}{STRIKE}{TYPE}
         where M is month without leading zero (6 not 06).
-        Example: NSE_FO|NIFTY2661623050PE → NIFTY 23050 PE expiring 2026-06-16
+        Example: NSE_FO:NIFTY2661623050PE → NIFTY 23050 PE expiring 2026-06-16
+        Colon (:) separator is required — pipe (|) causes empty LTP response silently.
         """
         dt = datetime.strptime(expiry_upstox, "%Y-%m-%d")
         yy = dt.strftime("%y")    # "26"
         m  = str(dt.month)         # "6" (no leading zero — confirmed from logs)
         dd = dt.strftime("%d")    # "16"
-        return f"NSE_FO|NIFTY{yy}{m}{dd}{strike}{option_type}"
+        return f"NSE_FO:NIFTY{yy}{m}{dd}{strike}{option_type}"
 
     def _refresh_token(self) -> bool:
         """Force a fresh Upstox OAuth login and update self.token. Returns True on success.
@@ -275,11 +276,16 @@ class UpstoxTrader:
     def _get_ltps(self, buy_key: str, sell_key: str, buy_strike: int = 0, sell_strike: int = 0, _retry: bool = True) -> Tuple[float, float]:
         """Fetch live LTPs for both legs. Retries up to 3 times if response is empty."""
         import time as _time
-        url = f"{API_URL}/market-quote/ltp?instrument_key={buy_key},{sell_key}"
+        url = f"{API_URL}/market-quote/ltp"
 
         data = {}
         for attempt in range(1, 4):
-            resp = requests.get(url, headers=self._headers(), timeout=15)
+            resp = requests.get(
+                url,
+                headers=self._headers(),
+                params={"instrument_key": f"{buy_key},{sell_key}"},
+                timeout=15,
+            )
             if resp.status_code in (401, 403) and _retry:
                 logger.warning(f"[UPSTOX] {resp.status_code} on LTP — refreshing token and retrying once...")
                 if self._refresh_token():
