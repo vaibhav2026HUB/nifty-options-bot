@@ -45,9 +45,10 @@ HEADERS = [
     "profit_target",     # per unit
     "stop_loss_lvl",     # per unit
     "exit_time",
-    "exit_reason",       # profit_target | stop_loss | spot_stop_adverse | force_exit_3pm | -
+    "exit_reason",       # profit_target | stop_loss | trailing_stop | spot_stop_adverse | force_exit_3pm | -
     "exit_premium",
     "pnl",
+    "intraday_peak_pct", # highest % gain seen during session (e.g. 38.2%)
     "capital_before",
     "capital_after",
     "notes",
@@ -131,7 +132,8 @@ def log_trade_open(signal, spread_order, capital_before: float):
 
 
 def log_trade_close(exit_reason: str, exit_premium: float,
-                    pnl: float, capital_after: float):
+                    pnl: float, capital_after: float,
+                    intraday_peak_pct: float = 0.0):
     """
     Updates the last row in the journal with exit details.
     Called when a position is closed.
@@ -150,15 +152,20 @@ def log_trade_close(exit_reason: str, exit_premium: float,
     for row in reversed(rows):
         if row.get("trade_taken") == "yes" and row.get("exit_reason") == "-":
             now = datetime.now(IST)
-            row["exit_time"]    = now.strftime("%H:%M")
-            row["exit_reason"]  = exit_reason
-            row["exit_premium"] = round(exit_premium, 2)
-            row["pnl"]          = round(pnl, 2)
-            row["capital_after"] = round(capital_after, 2)
+            row["exit_time"]         = now.strftime("%H:%M")
+            row["exit_reason"]       = exit_reason
+            row["exit_premium"]      = round(exit_premium, 2)
+            row["pnl"]               = round(pnl, 2)
+            row["intraday_peak_pct"] = f"{intraday_peak_pct:.1%}"
+            row["capital_after"]     = round(capital_after, 2)
             break
 
+    # Fill missing intraday_peak_pct for rows written before this column existed
+    for row in rows:
+        row.setdefault("intraday_peak_pct", "-")
+
     with open(JOURNAL_PATH, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HEADERS)
+        writer = csv.DictWriter(f, fieldnames=HEADERS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 

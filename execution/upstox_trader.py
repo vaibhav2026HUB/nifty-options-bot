@@ -45,6 +45,7 @@ class UpstoxTrader:
         self.token = access_token
         self.nse   = nse_client
         self.risk  = risk_manager
+        self._session_peak_pct = 0.0   # highest gain% seen this session
         self._ensure_log_file()
 
     # ─── Entry ────────────────────────────────────────────────────────────────
@@ -138,6 +139,7 @@ class UpstoxTrader:
             "profit_target_pct": signal.profit_target_pct,
             "entry_time":        str(datetime.now(IST)),
         }
+        self._session_peak_pct = 0.0   # reset for fresh session
         self.risk.record_trade_open(position)
 
         msg = (
@@ -173,6 +175,10 @@ class UpstoxTrader:
         pt_mult = 1 + position.get("profit_target_pct", 1.00)
         sl_pct  = position.get("stop_loss_pct", 0.50)
 
+        # Track session peak gain
+        current_gain_pct = (current_spread - entry_premium) / entry_premium
+        self._session_peak_pct = max(self._session_peak_pct, current_gain_pct)
+
         if current_spread >= pt_mult * entry_premium:
             self._exit(position, "profit_target", current_spread)
             return "profit_target"
@@ -180,6 +186,15 @@ class UpstoxTrader:
         if current_spread <= sl_pct * entry_premium:
             self._exit(position, "stop_loss", current_spread)
             return "stop_loss"
+
+        # Trailing stop: once 35% gain seen, exit if fades to 20%
+        if self._session_peak_pct >= 0.35 and current_gain_pct <= 0.20:
+            logger.info(
+                f"[UPSTOX] TRAILING STOP — peak was {self._session_peak_pct:.1%}, "
+                f"current gain faded to {current_gain_pct:.1%}"
+            )
+            self._exit(position, "trailing_stop", current_spread)
+            return "trailing_stop"
 
         try:
             current_spot = self.nse.get_nifty_spot()
@@ -197,7 +212,8 @@ class UpstoxTrader:
 
         logger.debug(
             f"[UPSTOX] Position OK — spread={current_spread:.2f} "
-            f"(entry={entry_premium:.2f}) spot={current_spot:.0f}"
+            f"(entry={entry_premium:.2f})  gain={current_gain_pct:.1%}  "
+            f"peak={self._session_peak_pct:.1%}"
         )
         return None
 
@@ -218,8 +234,8 @@ class UpstoxTrader:
         """
         dt = datetime.strptime(expiry_upstox, "%Y-%m-%d")
         yy = dt.strftime("%y")    # "26"
-        m  = str(dt.month)         # "6" (no leading zero — confirmed from logs)
-        dd = dt.strftime("%d")    # "16"
+        m  = str(dt.month)        # "7"  (no leading zero — confirmed from logs)
+        dd = str(dt.day)          # "7"  (no leading zero — strftime("%d") gives "07" which 400s)
         return f"NSE_FO:NIFTY{yy}{m}{dd}{strike}{option_type}"
 
     def _refresh_token(self) -> bool:
@@ -405,7 +421,8 @@ class UpstoxTrader:
         self._log_trade(position, exit_premium, reason, pnl)
 
         import journal
-        journal.log_trade_close(reason, exit_premium, pnl, capital)
+        journal.log_trade_close(reason, exit_premium, pnl, capital,
+                                intraday_peak_pct=self._session_peak_pct)
 
         msg = (
             f"[UPSTOX] EXIT — {reason.upper()}\n"
